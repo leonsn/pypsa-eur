@@ -1,6 +1,6 @@
 configfile: "config.yaml"
 
-localrules: all, prepare_links_p_nom, base_network, build_renewable_potentials, build_powerplants, add_electricity, add_sectors, prepare_network, extract_summaries, plot_network, scenario_comparions
+localrules: all, prepare_links_p_nom, base_network, build_renewable_potentials, build_powerplants, add_electricity, add_sectors, prepare_network
 
 wildcard_constraints:
     lv="[0-9\.]+",
@@ -12,10 +12,15 @@ wildcard_constraints:
 # rule all:
 #     input: "results/summaries/costs2-summary.csv"
 
-rule solve_all_elec_networks:
+rule benchmark_juliapython:
     input:
-        expand("results/networks/elec_s{simpl}_{clusters}_lv{lv}_{opts}.nc",
-               **config['scenario'])
+        expand("benchmarks/min_solve_network/{juliapython}_time_{network}_s{simpl}_{clusters}_lv{lv}_{opts}.csv",
+               juliapython=["julia", "python"],
+               network="elec",
+               simpl="",
+               clusters=[45, 64, 90, 128, 181],
+               lv=1.25, # ignored
+               opts="3H")
 
 rule prepare_links_p_nom:
     output: 'data/links_p_nom.csv'
@@ -59,12 +64,12 @@ rule build_shapes:
     resources: mem_mb=500
     script: "scripts/build_shapes.py"
 
-rule build_powerplants:
-    input: base_network="networks/base.nc"
-    output: "resources/powerplants.csv"
-    threads: 1
-    resources: mem_mb=500
-    script: "scripts/build_powerplants.py"
+# rule build_powerplants:
+#     input: base_network="networks/base.nc"
+#     output: "resources/powerplants.csv"
+#     threads: 1
+#     resources: mem_mb=500
+#     script: "scripts/build_powerplants.py"
 
 rule build_bus_regions:
     input:
@@ -165,16 +170,6 @@ rule cluster_network:
     resources: mem_mb=3000
     script: "scripts/cluster_network.py"
 
-# rule add_sectors:
-#     input:
-#         network="networks/elec_{cost}_{resarea}_{opts}.nc",
-#         emobility="data/emobility"
-#     output: "networks/sector_{cost}_{resarea}_{sectors}_{opts}.nc"
-#     benchmark: "benchmarks/add_sectors/sector_{resarea}_{sectors}_{opts}"
-#     threads: 1
-#     resources: mem_mb=1000
-#     script: "scripts/add_sectors.py"
-
 rule prepare_network:
     input: 'networks/{network}_s{simpl}_{clusters}.nc'
     output: 'networks/{network}_s{simpl}_{clusters}_lv{lv}_{opts}.nc'
@@ -193,92 +188,31 @@ def memory(w):
         return 10000 + 190 * int(w.clusters)
         # return 4890+310 * int(w.clusters)
 
-rule solve_network:
+rule min_solve_network_pypsa:
     input: "networks/{network}_s{simpl}_{clusters}_lv{lv}_{opts}.nc"
-    output: "results/networks/{network}_s{simpl}_{clusters}_lv{lv}_{opts}.nc"
+    output: "benchmarks/min_solve_network/python_time_{network}_s{simpl}_{clusters}_lv{lv}_{opts}.csv"
+    log: "benchmarks/min_solve_network/python_mprof_{network}_s{simpl}_{clusters}_lv{lv}_{opts}"
+    benchmark: "benchmarks/min_solve_network/python_benc_{network}_s{simpl}_{clusters}_lv{lv}_{opts}"
     shadow: "shallow"
-    params: partition=partition
-    log:
-        gurobi="logs/{network}_s{simpl}_{clusters}_lv{lv}_{opts}_gurobi.log",
-        python="logs/{network}_s{simpl}_{clusters}_lv{lv}_{opts}_python.log",
-        memory="logs/{network}_s{simpl}_{clusters}_lv{lv}_{opts}_memory.log"
-    benchmark: "benchmarks/solve_network/{network}_s{simpl}_{clusters}_lv{lv}_{opts}"
-    threads: 4
+    threads: 2
     resources:
         mem_mb=memory,
         x_men=lambda w: 1 if partition(w) == 'x-men' else 0,
         vres=lambda w: 1 if partition(w) == 'vres' else 0
-    script: "scripts/solve_network.py"
+    shell: "mprof run -C -T 5 --nopython python3 scripts/min_solve_network.py {input:q} {output:q} {log:q}"
 
-def partition_op(w):
-    return 'vres' if memory_op(w) >= 60000 else 'x-men'
-
-def memory_op(w):
-    return 5000 + 372 * int(w.clusters)
-
-rule solve_operations_network:
-    input:
-        unprepared="networks/{network}_s{simpl}_{clusters}.nc",
-        optimized="results/networks/{network}_s{simpl}_{clusters}_lv{lv}_{opts}.nc"
-    output: "results/networks/{network}_s{simpl}_{clusters}_lv{lv}_{opts}_op.nc"
+rule min_solve_network_julia:
+    input: "networks/{network}_s{simpl}_{clusters}_lv{lv}_{opts}.nc"
+    output: "benchmarks/min_solve_network/julia_time_{network}_s{simpl}_{clusters}_lv{lv}_{opts}.csv"
+    log: "benchmarks/min_solve_network/julia_mprof_{network}_s{simpl}_{clusters}_lv{lv}_{opts}"
+    benchmark: "benchmarks/min_solve_network/julia_benc_{network}_s{simpl}_{clusters}_lv{lv}_{opts}"
     shadow: "shallow"
-    params: partition=partition_op
-    log:
-        gurobi="logs/solve_operations_network/{network}_s{simpl}_{clusters}_lv{lv}_{opts}_op_gurobi.log",
-        python="logs/solve_operations_network/{network}_s{simpl}_{clusters}_lv{lv}_{opts}_op_python.log",
-        memory="logs/solve_operations_network/{network}_s{simpl}_{clusters}_lv{lv}_{opts}_op_memory.log"
-    benchmark: "benchmarks/solve_operations_network/{network}_s{simpl}_{clusters}_lv{lv}_{opts}"
-    threads: 4
+    threads: 2
     resources:
-        mem_mb=memory_op,
-        x_men=lambda w: 1 if partition_op(w) == 'x-men' else 0,
-        vres=lambda w: 1 if partition_op(w) == 'vres' else 0
-    script: "scripts/solve_operations_network.py"
-
-rule plot_network:
-    input:
-        network='results/networks/{cost}_{resarea}_{sectors}_{opts}.nc',
-        supply_regions='data/supply_regions/supply_regions.shp',
-        resarea=lambda w: config['data']['resarea'][w.resarea]
-    output:
-        'results/plots/network_{cost}_{resarea}_{sectors}_{opts}_{attr}.pdf'
-    script: "scripts/plot_network.py"
-
-# rule plot_costs:
-#     input: 'results/summaries/costs2-summary.csv'
-#     output:
-#         expand('results/plots/costs_{cost}_{resarea}_{sectors}_{opt}',
-#                **dict(chain(config['scenario'].items(), (('{param}')))
-#         touch('results/plots/scenario_plots')
-#     params:
-#         tmpl="results/plots/costs_[cost]_[resarea]_[sectors]_[opt]"
-#         exts=["pdf", "png"]
-#     scripts: "scripts/plot_costs.py"
-
-# rule scenario_comparison:
-#     input:
-#         expand('results/plots/network_{cost}_{sectors}_{opts}_{attr}.pdf',
-#                version=config['version'],
-#                attr=['p_nom'],
-#                **config['scenario'])
-#     output:
-#        html='results/plots/scenario_{param}.html'
-#     params:
-#        tmpl="network_[cost]_[resarea]_[sectors]_[opts]_[attr]",
-#        plot_dir='results/plots'
-#     script: "scripts/scenario_comparison.py"
-
-# rule extract_summaries:
-#     input:
-#         expand("results/networks/{cost}_{sectors}_{opts}.nc",
-#                **config['scenario'])
-#     output:
-#         **{n: "results/summaries/{}-summary.csv".format(n)
-#            for n in ['costs', 'costs2', 'e_curtailed', 'e_nom_opt', 'e', 'p_nom_opt']}
-#     params:
-#         scenario_tmpl="[cost]_[resarea]_[sectors]_[opts]",
-#         scenarios=config['scenario']
-#     script: "scripts/extract_summaries.py"
+        mem_mb=memory,
+        x_men=lambda w: 1 if partition(w) == 'x-men' else 0,
+        vres=lambda w: 1 if partition(w) == 'vres' else 0
+    shell: "mprof run -C -T 5 --nopython julia scripts/min_solve_network.jl {input:q} {output:q} {log:q}"
 
 
 # Local Variables:

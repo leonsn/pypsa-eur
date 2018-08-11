@@ -28,7 +28,7 @@ electricity:
     battery: 6
     H2: 168
 
-  conventional_carriers: [nuclear, oil, OCGT, CCGT, coal, lignite, geothermal, biomass]
+  conventional_carriers: [] # [nuclear, oil, OCGT, CCGT, coal, lignite, geothermal, biomass]
 
 atlite:
   nprocesses: 4
