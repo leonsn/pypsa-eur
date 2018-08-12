@@ -157,6 +157,11 @@ def _set_electrical_parameters_links(links):
     if not snakemake.config['links']['with_under_construction']:
         links.loc[links.under_construction.astype(bool), "p_nom"] = 0.
 
+    if links["p_nom"].isnull().any():
+        logger.warn("{} links with p_nom = nan have been set to 500MW"
+                    .format(links["p_nom"].isnull().sum()))
+        links["p_nom"].fillna("500", inplace=True)
+
     return links
 
 def _set_electrical_parameters_converters(converters):
