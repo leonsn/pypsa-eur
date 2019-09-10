@@ -1,23 +1,21 @@
-version: 0.1
+version: 0.1-leon
 logging_level: INFO
 
 summary_dir: results
 
 scenario:
-  sectors: [E] # ,E+EV,E+BEV,E+BEV+V2G] # [ E+EV, E+BEV, E+BEV+V2G ]
+  sectors: [E] #[E,E+EV,E+BEV,E+BEV+V2G]
   simpl: ['']
-  #ll: ['v1.0', 'v1.09', 'v1.125', 'v1.18', 'v1.25', 'v1.35', 'v1.5', 'v1.7', 'v2.0', 'vopt'] # line limit a 'v' prefix means volume
-  ll: ['vopt', 'copt'] #['v1.0', 'v1.125', 'v1.25', 'v1.5', 'v2.0', 'vopt'] # line limit a 'v' prefix means volume
-  #ll: ['c1.0', 'v1.125', 'v1.25', 'v1.5', 'v2.0', 'vopt'] # line limit a 'v' prefix means volume
-  clusters: [37, 45, 64, 90, 128, 181, 256, 362, 512] # (2**np.r_[5.5:9:.5]).astype(int)
-  opts: [Co2L-3H] #, LC-FL, LC-T, Ep-T, Co2L-T]
+  ll: ['vopt'] #['vopt','copt','c1.0','v1.0','v1.125','v1.25','v1.5','v2.0'] #line limit 'v' prefix means volume and 'c' means cost.
+  clusters: [37] #[37, 45, 64, 90, 128, 181, 256, 362, 512] # (2**np.r_[5.5:9:.5]).astype(int)
+  opts: [Co2L-3H] #, LC-FL, LC-T, Ep-T, Co2L-T] # add Co2L for activating the CO2 limit, numberH like 3H resamples to every third hour, Co2L or Ep adds emission limits (currently broken and deactivated) 
 
 countries: ['AL', 'AT', 'BA', 'BE', 'BG', 'CH', 'CZ', 'DE', 'DK', 'EE', 'ES', 'FI', 'FR', 'GB', 'GR', 'HR', 'HU', 'IE', 'IT', 'LT', 'LU', 'LV', 'ME', 'MK', 'NL', 'NO', 'PL', 'PT', 'RO', 'RS', 'SE', 'SI', 'SK'] 
 
 snapshots:
   # arguments to pd.date_range
   start: "2013-01-01"
-  end: "2014-01-01"
+  end: "2013-01-11" #"2014-01-01"
   closed: 'left' # end is not inclusive
 
 enable:

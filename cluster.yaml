@@ -12,7 +12,7 @@ trace_solve_network:
 
 solve:
   walltime: "05:00:00:00"
-  threads: 4 # Group threads are not aggregated
+  threads: 8 # Group threads are not aggregated
 
 solve_operations:
   walltime: "01:00:00:00"
