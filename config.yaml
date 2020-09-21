@@ -1,4 +1,4 @@
-version: 0.1-leon
+version: 0.1-leon-full
 logging_level: INFO
 
 summary_dir: results
@@ -15,7 +15,7 @@ countries: ['AL', 'AT', 'BA', 'BE', 'BG', 'CH', 'CZ', 'DE', 'DK', 'EE', 'ES', 'F
 snapshots:
   # arguments to pd.date_range
   start: "2013-01-01"
-  end: "2013-01-11" #"2014-01-01"
+  end: '2014-01-01' #"2013-01-11" #"2014-01-01"
   closed: 'left' # end is not inclusive
 
 enable:
