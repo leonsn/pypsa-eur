@@ -1,4 +1,29 @@
+# SPDX-FileCopyrightText: : 2017-2020 The PyPSA-Eur Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+"""
+Plots energy and cost summaries for solved networks.
+
+Relevant Settings
+-----------------
+
+Inputs
+------
+
+Outputs
+-------
+
+Description
+-----------
+
+"""
+
 import os
+import logging
+logger = logging.getLogger(__name__)
+from _helpers import configure_logging
+
 import pandas as pd
 import matplotlib.pyplot as plt
 
@@ -161,6 +186,13 @@ def plot_energy(infn, fn=None):
 
 
 if __name__ == "__main__":
+    if 'snakemake' not in globals():
+        from _helpers import mock_snakemake
+        snakemake = mock_snakemake('plot_summary', summary='energy', network='elec',
+                                  simpl='', clusters=5, ll='copt', opts='Co2L-24H',
+                                  attr='', ext='png', country='all')
+    configure_logging(snakemake)
+
     summary = snakemake.wildcards.summary
     try:
         func = globals()[f"plot_{summary}"]

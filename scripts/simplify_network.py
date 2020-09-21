@@ -1,20 +1,98 @@
-# coding: utf-8
+# SPDX-FileCopyrightText: : 2017-2020 The PyPSA-Eur Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
 
-import pandas as pd
-idx = pd.IndexSlice
+# coding: utf-8
+"""
+Lifts electrical transmission network to a single 380 kV voltage layer,
+removes dead-ends of the network,
+and reduces multi-hop HVDC connections to a single link.
+
+Relevant Settings
+-----------------
+
+.. code:: yaml
+
+    costs:
+        USD2013_to_EUR2013:
+        discountrate:
+        marginal_cost:
+        capital_cost:
+
+    electricity:
+        max_hours:
+
+    renewables: (keys)
+        {technology}:
+            potential:
+
+    lines:
+        length_factor:
+
+    links:
+        p_max_pu:
+
+    solving:
+        solver:
+            name:
+
+.. seealso::
+    Documentation of the configuration file ``config.yaml`` at
+    :ref:`costs_cf`, :ref:`electricity_cf`, :ref:`renewable_cf`,
+    :ref:`lines_cf`, :ref:`links_cf`, :ref:`solving_cf`
+
+Inputs
+------
+
+- ``data/costs.csv``: The database of cost assumptions for all included technologies for specific years from various sources; e.g. discount rate, lifetime, investment (CAPEX), fixed operation and maintenance (FOM), variable operation and maintenance (VOM), fuel costs, efficiency, carbon-dioxide intensity.
+- ``resources/regions_onshore.geojson``: confer :ref:`busregions`
+- ``resources/regions_offshore.geojson``: confer :ref:`busregions`
+- ``networks/{network}.nc``: confer :ref:`electricity`
+
+Outputs
+-------
+
+- ``resources/regions_onshore_{network}_s{simpl}.geojson``:
+
+    .. image:: ../img/regions_onshore_elec_s.png
+            :scale: 33 %
+
+- ``resources/regions_offshore_{network}_s{simpl}.geojson``:
+
+    .. image:: ../img/regions_offshore_elec_s  .png
+            :scale: 33 %
+
+- ``resources/clustermaps_{network}_s{simpl}.h5``: Mapping of buses from ``networks/elec.nc`` to ``networks/elec_s{simpl}.nc``; has keys ['/busmap_s']
+- ``networks/{network}_s{simpl}.nc``:
+
+    .. image:: ../img/elec_s.png
+        :scale: 33 %
+
+Description
+-----------
+
+The rule :mod:`simplify_network` does up to four things:
+
+1. Create an equivalent transmission network in which all voltage levels are mapped to the 380 kV level by the function ``simplify_network(...)``.
+
+2. DC only sub-networks that are connected at only two buses to the AC network are reduced to a single representative link in the function ``simplify_links(...)``. The components attached to buses in between are moved to the nearest endpoint. The grid connection cost of offshore wind generators are added to the captial costs of the generator.
+
+3. Stub lines and links, i.e. dead-ends of the network, are sequentially removed from the network in the function ``remove_stubs(...)``. Components are moved along.
+
+4. Optionally, if an integer were provided for the wildcard ``{simpl}`` (e.g. ``networks/elec_s500.nc``), the network is clustered to this number of clusters with the routines from the ``cluster_network`` rule with the function ``cluster_network.cluster(...)``. This step is usually skipped!
+"""
 
 import logging
 logger = logging.getLogger(__name__)
+from _helpers import configure_logging
 
-import os
-import re
+from cluster_network import clustering_for_n_clusters, cluster_regions
+from add_electricity import load_costs
+
+import pandas as pd
 import numpy as np
 import scipy as sp
 from scipy.sparse.csgraph import connected_components, dijkstra
-import xarray as xr
-import geopandas as gpd
-import shapely
-import networkx as nx
 
 from six import iteritems
 from six.moves import reduce
@@ -23,8 +101,7 @@ import pypsa
 from pypsa.io import import_components_from_dataframe, import_series_from_dataframe
 from pypsa.networkclustering import busmap_by_stubs, aggregategenerators, aggregateoneport
 
-from cluster_network import clustering_for_n_clusters, cluster_regions
-from add_electricity import load_costs
+idx = pd.IndexSlice
 
 def simplify_network_to_380(n):
     ## All goes to v_nom == 380
@@ -258,27 +335,10 @@ def cluster(n, n_clusters):
     return clustering.network, clustering.busmap
 
 if __name__ == "__main__":
-    # Detect running outside of snakemake and mock snakemake for testing
     if 'snakemake' not in globals():
-        from vresutils.snakemake import MockSnakemake, Dict
-        snakemake = MockSnakemake(
-            path='..',
-            wildcards=Dict(simpl='1024', network='elec'),
-            input=Dict(
-                network='networks/{network}.nc',
-                tech_costs="data/costs.csv",
-                regions_onshore="resources/regions_onshore.geojson",
-                regions_offshore="resources/regions_offshore.geojson"
-            ),
-            output=Dict(
-                network='networks/{network}_s{simpl}.nc',
-                regions_onshore="resources/regions_onshore_{network}_s{simpl}.geojson",
-                regions_offshore="resources/regions_offshore_{network}_s{simpl}.geojson",
-                clustermaps='resources/clustermaps_{network}_s{simpl}.h5'
-            )
-        )
-
-    logging.basicConfig(level=snakemake.config['logging_level'])
+        from _helpers import mock_snakemake
+        snakemake = mock_snakemake('simplify_network', simpl='', network='elec')
+    configure_logging(snakemake)
 
     n = pypsa.Network(snakemake.input.network)
 

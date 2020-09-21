@@ -1,6 +1,65 @@
+# SPDX-FileCopyrightText: : 2017-2020 The PyPSA-Eur Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+"""
+Creates summaries of aggregated energy and costs as ``.csv`` files.
+
+Relevant Settings
+-----------------
+
+.. code:: yaml
+
+    costs:
+        USD2013_to_EUR2013:
+        discountrate:
+        marginal_cost:
+        capital_cost:
+
+    electricity:
+        max_hours:
+
+.. seealso::
+    Documentation of the configuration file ``config.yaml`` at
+    :ref:`costs_cf`, :ref:`electricity_cf`
+
+Inputs
+------
+
+Outputs
+-------
+
+Description
+-----------
+
+The following rule can be used to summarize the results in seperate .csv files:
+
+.. code::
+
+    snakemake results/summaries/elec_s_all_lall_Co2L-3H_all
+                                         clusters
+                                             line volume or cost cap
+                                                - options
+                                                        - all countries
+
+the line volume/cost cap field can be set to one of the following:
+* ``lv1.25`` for a particular line volume extension by 25%
+* ``lc1.25`` for a line cost extension by 25 %
+* ``lall`` for all evalutated caps
+* ``lvall`` for all line volume caps
+* ``lcall`` for all line cost caps
+
+Replacing '/summaries/' with '/plots/' creates nice colored maps of the results.
+
+"""
+
+import logging
+logger = logging.getLogger(__name__)
+from _helpers import configure_logging
+
 import os
+
 from six import iteritems
-from itertools import product
 import pandas as pd
 
 import pypsa
@@ -10,6 +69,13 @@ from add_electricity import load_costs, update_transmission_costs
 idx = pd.IndexSlice
 
 opt_name = {"Store": "e", "Line" : "s", "Transformer" : "s"}
+
+def _add_indexed_rows(df, raw_index):
+    new_index = df.index|pd.MultiIndex.from_product(raw_index)
+    if isinstance(new_index, pd.Index):
+        new_index = pd.MultiIndex.from_tuples(new_index)
+
+    return df.reindex(new_index)
 
 def assign_carriers(n):
 
@@ -31,16 +97,17 @@ def assign_carriers(n):
     if "EU gas store" in n.stores.index and n.stores.loc["EU gas Store","carrier"] == "":
         n.stores.loc["EU gas Store","carrier"] = "gas Store"
 
-
 def calculate_costs(n,label,costs):
 
     for c in n.iterate_components(n.branch_components|n.controllable_one_port_components^{"Load"}):
         capital_costs = c.df.capital_cost*c.df[opt_name.get(c.name,"p") + "_nom_opt"]
         capital_costs_grouped = capital_costs.groupby(c.df.carrier).sum()
 
-        costs = costs.reindex(costs.index|pd.MultiIndex.from_product([[c.list_name],["capital"],capital_costs_grouped.index]))
+        # Index tuple(s) indicating the newly to-be-added row(s)
+        raw_index = tuple([[c.list_name],["capital"],list(capital_costs_grouped.index)])
+        costs = _add_indexed_rows(costs, raw_index)
 
-        costs.loc[idx[c.list_name,"capital",list(capital_costs_grouped.index)],label] = capital_costs_grouped.values
+        costs.loc[idx[raw_index],label] = capital_costs_grouped.values
 
         if c.name == "Link":
             p = c.pnl.p0.multiply(n.snapshot_weightings,axis=0).sum()
@@ -86,8 +153,12 @@ def calculate_energy(n,label,energy):
     return energy
 
 def include_in_summary(summary, multiindexprefix, label, item):
-    summary = summary.reindex(summary.index | pd.MultiIndex.from_product([[p] for p in multiindexprefix] + [item.index]))
-    summary.loc[idx[tuple(multiindexprefix + [list(item.index)])], label] = item.values
+
+    # Index tuple(s) indicating the newly to-be-added row(s)
+    raw_index = tuple([multiindexprefix,list(item.index)])
+    summary = _add_indexed_rows(summary, raw_index)
+
+    summary.loc[idx[raw_index], label] = item.values
     return summary
 
 def calculate_capacity(n,label,capacity):
@@ -124,13 +195,16 @@ def calculate_supply(n,label,supply):
 
             items = c.df.index[c.df.bus.map(bus_map)]
 
-            if len(items) == 0:
+            if len(items) == 0 or c.pnl.p.empty:
                 continue
 
             s = c.pnl.p[items].max().multiply(c.df.loc[items,'sign']).groupby(c.df.loc[items,'carrier']).sum()
 
-            supply = supply.reindex(supply.index|pd.MultiIndex.from_product([[i],[c.list_name],s.index]))
-            supply.loc[idx[i,c.list_name,list(s.index)],label] = s.values
+            # Index tuple(s) indicating the newly to-be-added row(s)
+            raw_index = tuple([[i],[c.list_name],list(s.index)])
+            supply = _add_indexed_rows(supply, raw_index)
+
+            supply.loc[idx[raw_index],label] = s.values
 
 
         for c in n.iterate_components(n.branch_components):
@@ -139,7 +213,7 @@ def calculate_supply(n,label,supply):
 
                 items = c.df.index[c.df["bus" + end].map(bus_map)]
 
-                if len(items) == 0:
+                if len(items) == 0 or c.pnl["p"+end].empty:
                     continue
 
                 #lots of sign compensation for direction and to do maximums
@@ -167,13 +241,16 @@ def calculate_supply_energy(n,label,supply_energy):
 
             items = c.df.index[c.df.bus.map(bus_map)]
 
-            if len(items) == 0:
+            if len(items) == 0 or c.pnl.p.empty:
                 continue
 
             s = c.pnl.p[items].sum().multiply(c.df.loc[items,'sign']).groupby(c.df.loc[items,'carrier']).sum()
 
-            supply_energy = supply_energy.reindex(supply_energy.index|pd.MultiIndex.from_product([[i],[c.list_name],s.index]))
-            supply_energy.loc[idx[i,c.list_name,list(s.index)],label] = s.values
+            # Index tuple(s) indicating the newly to-be-added row(s)
+            raw_index = tuple([[i],[c.list_name],list(s.index)])
+            supply_energy = _add_indexed_rows(supply_energy, raw_index)
+
+            supply_energy.loc[idx[raw_index],label] = s.values
 
 
         for c in n.iterate_components(n.branch_components):
@@ -182,7 +259,7 @@ def calculate_supply_energy(n,label,supply_energy):
 
                 items = c.df.index[c.df["bus" + end].map(bus_map)]
 
-                if len(items) == 0:
+                if len(items) == 0  or c.pnl['p' + end].empty:
                     continue
 
                 s = (-1)*c.pnl["p"+end][items].sum().groupby(c.df.loc[items,'carrier']).sum()
@@ -398,7 +475,16 @@ def to_csv(dfs):
 
 
 if __name__ == "__main__":
-    # Detect running outside of snakemake and mock snakemake for testing
+    if 'snakemake' not in globals():
+        from _helpers import mock_snakemake
+        snakemake = mock_snakemake('make_summary', network='elec', simpl='',
+                           clusters='5', ll='copt', opts='Co2L-24H', country='all')
+        network_dir = os.path.join('..', 'results', 'networks')
+    else:
+        network_dir = os.path.join('results', 'networks')
+    configure_logging(snakemake)
+
+
     def expand_from_wildcard(key):
         w = getattr(snakemake.wildcards, key)
         return snakemake.config["scenario"][key] if w == "all" else [w]
@@ -410,12 +496,9 @@ if __name__ == "__main__":
     else:
         ll = [snakemake.wildcards.ll]
 
-    networks_dict = {(simpl,clusters,l,opts) : ('results/networks/{network}_s{simpl}_{clusters}_l{ll}_{opts}.nc'
-                                                 .format(network=snakemake.wildcards.network,
-                                                         simpl=simpl,
-                                                         clusters=clusters,
-                                                         opts=opts,
-                                                         ll=l))
+    networks_dict = {(simpl,clusters,l,opts) :
+        os.path.join(network_dir, f'{snakemake.wildcards.network}_s{simpl}_'
+                                  f'{clusters}_ec_l{l}_{opts}.nc')
                      for simpl in expand_from_wildcard("simpl")
                      for clusters in expand_from_wildcard("clusters")
                      for l in ll

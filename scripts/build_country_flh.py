@@ -1,5 +1,71 @@
 #!/usr/bin/env python
 
+# SPDX-FileCopyrightText: : 2017-2020 The PyPSA-Eur Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+"""
+Create ``.csv`` files and plots for comparing per country full load hours of renewable time series.
+
+Relevant Settings
+-----------------
+
+.. code:: yaml
+
+    snapshots:
+
+    renewable:
+        {technology}:
+            cutout:
+            resource:
+            correction_factor:
+
+.. seealso::
+    Documentation of the configuration file ``config.yaml`` at
+    :ref:`snapshots_cf`, :ref:`renewable_cf`
+
+Inputs
+------
+
+- ``data/bundle/corine/g250_clc06_V18_5.tif``: `CORINE Land Cover (CLC) <https://land.copernicus.eu/pan-european/corine-land-cover>`_ inventory on `44 classes <https://wiki.openstreetmap.org/wiki/Corine_Land_Cover#Tagging>`_ of land use (e.g. forests, arable land, industrial, urban areas).
+
+    .. image:: img/corine.png
+        :scale: 33 %
+
+- ``data/bundle/GEBCO_2014_2D.nc``:  A `bathymetric <https://en.wikipedia.org/wiki/Bathymetry>`_ data set with a global terrain model for ocean and land at 15 arc-second intervals by the `General Bathymetric Chart of the Oceans (GEBCO) <https://www.gebco.net/data_and_products/gridded_bathymetry_data/>`_.
+
+    .. image:: img/gebco_2019_grid_image.jpg
+        :scale: 50 %
+
+    **Source:** `GEBCO <https://www.gebco.net/data_and_products/images/gebco_2019_grid_image.jpg>`_
+
+- ``data/pietzker2014.xlsx``: `Supplementary material 2 <https://ars.els-cdn.com/content/image/1-s2.0-S0306261914008149-mmc2.xlsx>`_ from `Pietzcker et al. <https://doi.org/10.1016/j.apenergy.2014.08.011>`_; not part of the data bundle; download and place here yourself.
+- ``resources/natura.tiff``: confer :ref:`natura`
+- ``resources/country_shapes.geojson``: confer :ref:`shapes`
+- ``resources/offshore_shapes.geojson``: confer :ref:`shapes`
+- ``resources/regions_onshore.geojson``: (if not offshore wind), confer :ref:`busregions`
+- ``resources/regions_offshore.geojson``: (if offshore wind), :ref:`busregions`
+- ``"cutouts/" + config["renewable"][{technology}]['cutout']``: :ref:`cutout`
+- ``networks/base.nc``: :ref:`base`
+
+Outputs
+-------
+
+- ``resources/country_flh_area_{technology}.csv``:
+- ``resources/country_flh_aggregated_{technology}.csv``:
+- ``resources/country_flh_uncorrected_{technology}.csv``:
+- ``resources/country_flh_{technology}.pdf``:
+- ``resources/country_exclusion_{technology}``:
+
+Description
+-----------
+
+"""
+
+import logging
+logger = logging.getLogger(__name__)
+from _helpers import configure_logging
+
 import os
 import atlite
 import numpy as np
@@ -7,7 +73,6 @@ import xarray as xr
 import pandas as pd
 
 import geokit as gk
-from osgeo import gdal
 from scipy.sparse import vstack
 import pycountry as pyc
 import matplotlib.pyplot as plt
@@ -16,8 +81,6 @@ from vresutils import landuse as vlanduse
 from vresutils.array import spdiag
 
 import progressbar as pgb
-import logging
-logger = logging.getLogger(__name__)
 
 from build_renewable_profiles import init_globals, calculate_potential
 
@@ -54,8 +117,8 @@ def plot_area_solar(area, p_area, countries):
         d.plot.bar(ax=ax, legend=False, align='edge', width=1.)
         # ax.set_ylabel(f"Potential {c} / GW")
         ax.set_title(c)
-    ax.legend()
-    ax.set_xlabel("Full-load hours")
+        ax.legend()
+        ax.set_xlabel("Full-load hours")
 
     fig.savefig(snakemake.output.plot, transparent=True, bbox_inches='tight')
 
@@ -89,37 +152,13 @@ def build_aggregate(flh, countries, areamatrix, breaks, p_area, fn):
     agg.to_csv(fn)
 
 if __name__ == '__main__':
-    # Detect running outside of snakemake and mock snakemake for testing
     if 'snakemake' not in globals():
-        from vresutils.snakemake import MockSnakemake, Dict
-        snakemake = MockSnakemake(
-            wildcards=Dict(technology='solar'),
-            input=Dict(
-                base_network="networks/base.nc",
-                corine="data/bundle/corine/g250_clc06_V18_5.tif",
-                natura="resources/natura.tiff",
-                gebco="data/bundle/GEBCO_2014_2D.nc",
-                country_shapes='resources/country_shapes.geojson',
-                offshore_shapes='resources/offshore_shapes.geojson',
-                pietzker="data/pietzker2014.xlsx"
-            ),
-            output=Dict(
-                area="resources/country_flh_area_{technology}.csv",
-                aggregated="resources/country_flh_aggregated_{technology}.csv",
-                uncorrected="resources/country_flh_uncorrected_{technology}.csv",
-                plot="resources/country_flh_{technology}.pdf",
-                exclusion="resources/country_exclusion_{technology}"
-            )
-        )
-        snakemake.input['regions'] = os.path.join(snakemake.path, "resources",
-                                                  "country_shapes.geojson"
-                                                  if snakemake.wildcards.technology in ('onwind', 'solar')
-                                                  else "offshore_shapes.geojson")
-        snakemake.input['cutout'] = os.path.join(snakemake.path, "cutouts",
-                                                 snakemake.config["renewable"][snakemake.wildcards.technology]['cutout'])
+       from _helpers import mock_snakemake
+       snakemake = mock_snakemake('build_country_flh', technology='solar')
+    configure_logging(snakemake)
 
     pgb.streams.wrap_stderr()
-    logging.basicConfig(level=snakemake.config['logging_level'])
+
 
     config = snakemake.config['renewable'][snakemake.wildcards.technology]
 
@@ -139,7 +178,7 @@ if __name__ == '__main__':
     # Use GLAES to compute available potentials and the transition matrix
     paths = dict(snakemake.input)
 
-    init_globals(bounds, dx, dy, config, paths)
+    init_globals(bounds.xXyY, dx, dy, config, paths)
     regions = gk.vector.extractFeatures(paths["regions"], onlyAttr=True)
     countries = pd.Index(regions["name"], name="country")
 

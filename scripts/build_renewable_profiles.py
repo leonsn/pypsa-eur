@@ -1,5 +1,189 @@
 #!/usr/bin/env python
 
+# SPDX-FileCopyrightText: : 2017-2020 The PyPSA-Eur Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+"""Calculates for each network node the
+(i) installable capacity (based on land-use), (ii) the available generation time
+series (based on weather data), and (iii) the average distance from the node for
+onshore wind, AC-connected offshore wind, DC-connected offshore wind and solar
+PV generators. In addition for offshore wind it calculates the fraction of the
+grid connection which is under water.
+
+.. note:: Hydroelectric profiles are built in script :mod:`build_hydro_profiles`.
+
+Relevant settings
+-----------------
+
+.. code:: yaml
+
+    snapshots:
+
+    atlite:
+        nprocesses:
+
+    renewable:
+        {technology}:
+            cutout:
+            corine:
+            grid_codes:
+            distance:
+            natura:
+            max_depth:
+            max_shore_distance:
+            min_shore_distance:
+            capacity_per_sqkm:
+            correction_factor:
+            potential:
+            min_p_max_pu:
+            clip_p_max_pu:
+            resource:
+
+.. seealso::
+    Documentation of the configuration file ``config.yaml`` at
+    :ref:`snapshots_cf`, :ref:`atlite_cf`, :ref:`renewable_cf`
+
+Inputs
+------
+
+- ``data/bundle/corine/g250_clc06_V18_5.tif``: `CORINE Land Cover (CLC) <https://land.copernicus.eu/pan-european/corine-land-cover>`_ inventory on `44 classes <https://wiki.openstreetmap.org/wiki/Corine_Land_Cover#Tagging>`_ of land use (e.g. forests, arable land, industrial, urban areas).
+
+    .. image:: ../img/corine.png
+        :scale: 33 %
+
+- ``data/bundle/GEBCO_2014_2D.nc``: A `bathymetric <https://en.wikipedia.org/wiki/Bathymetry>`_ data set with a global terrain model for ocean and land at 15 arc-second intervals by the `General Bathymetric Chart of the Oceans (GEBCO) <https://www.gebco.net/data_and_products/gridded_bathymetry_data/>`_.
+
+    .. image:: ../img/gebco_2019_grid_image.jpg
+        :scale: 50 %
+
+    **Source:** `GEBCO <https://www.gebco.net/data_and_products/images/gebco_2019_grid_image.jpg>`_
+
+- ``resources/natura.tiff``: confer :ref:`natura`
+- ``resources/country_shapes.geojson``: confer :ref:`shapes`
+- ``resources/offshore_shapes.geojson``: confer :ref:`shapes`
+- ``resources/regions_onshore.geojson``: (if not offshore wind), confer :ref:`busregions`
+- ``resources/regions_offshore.geojson``: (if offshore wind), :ref:`busregions`
+- ``"cutouts/" + config["renewable"][{technology}]['cutout']``: :ref:`cutout`
+- ``networks/base.nc``: :ref:`base`
+
+Outputs
+-------
+
+- ``resources/profile_{technology}.nc`` with the following structure
+
+    ===================  ==========  =========================================================
+    Field                Dimensions  Description
+    ===================  ==========  =========================================================
+    profile              bus, time   the per unit hourly availability factors for each node
+    -------------------  ----------  ---------------------------------------------------------
+    weight               bus         sum of the layout weighting for each node
+    -------------------  ----------  ---------------------------------------------------------
+    p_nom_max            bus         maximal installable capacity at the node (in MW)
+    -------------------  ----------  ---------------------------------------------------------
+    potential            y, x        layout of generator units at cutout grid cells inside the
+                                     Voronoi cell (maximal installable capacity at each grid
+                                     cell multiplied by capacity factor)
+    -------------------  ----------  ---------------------------------------------------------
+    average_distance     bus         average distance of units in the Voronoi cell to the
+                                     grid node (in km)
+    -------------------  ----------  ---------------------------------------------------------
+    underwater_fraction  bus         fraction of the average connection distance which is
+                                     under water (only for offshore)
+    ===================  ==========  =========================================================
+
+    - **profile**
+
+    .. image:: ../img/profile_ts.png
+        :scale: 33 %
+        :align: center
+
+    - **p_nom_max**
+
+    .. image:: ../img/p_nom_max_hist.png
+        :scale: 33 %
+        :align: center
+
+    - **potential**
+
+    .. image:: ../img/potential_heatmap.png
+        :scale: 33 %
+        :align: center
+
+    - **average_distance**
+
+    .. image:: ../img/distance_hist.png
+        :scale: 33 %
+        :align: center
+
+    - **underwater_fraction**
+
+    .. image:: ../img/underwater_hist.png
+        :scale: 33 %
+        :align: center
+
+Description
+-----------
+
+This script functions at two main spatial resolutions: the resolution of the
+network nodes and their `Voronoi cells
+<https://en.wikipedia.org/wiki/Voronoi_diagram>`_, and the resolution of the
+cutout grid cells for the weather data. Typically the weather data grid is
+finer than the network nodes, so we have to work out the distribution of
+generators across the grid cells within each Voronoi cell. This is done by
+taking account of a combination of the available land at each grid cell and the
+capacity factor there.
+
+First the script computes how much of the technology can be installed at each
+cutout grid cell and each node using the `GLAES
+<https://github.com/FZJ-IEK3-VSA/glaes>`_ library. This uses the CORINE land use data,
+Natura2000 nature reserves and GEBCO bathymetry data.
+
+.. image:: ../img/eligibility.png
+    :scale: 50 %
+    :align: center
+
+To compute the layout of generators in each node's Voronoi cell, the
+installable potential in each grid cell is multiplied with the capacity factor
+at each grid cell. This is done since we assume more generators are installed
+at cells with a higher capacity factor.
+
+.. image:: ../img/offwinddc-gridcell.png
+    :scale: 50 %
+    :align: center
+
+.. image:: ../img/offwindac-gridcell.png
+    :scale: 50 %
+    :align: center
+
+.. image:: ../img/onwind-gridcell.png
+    :scale: 50 %
+    :align: center
+
+.. image:: ../img/solar-gridcell.png
+    :scale: 50 %
+    :align: center
+
+This layout is then used to compute the generation availability time series
+from the weather data cutout from ``atlite``.
+
+Two methods are available to compute the maximal installable potential for the
+node (`p_nom_max`): ``simple`` and ``conservative``:
+
+- ``simple`` adds up the installable potentials of the individual grid cells.
+  If the model comes close to this limit, then the time series may slightly
+  overestimate production since it is assumed the geographical distribution is
+  proportional to capacity factor.
+
+- ``conservative`` assertains the nodal limit by increasing capacities
+  proportional to the layout until the limit of an individual grid cell is
+  reached.
+
+"""
+import logging
+logger = logging.getLogger(__name__)
+from _helpers import configure_logging
+
 import matplotlib.pyplot as plt
 
 import os
@@ -9,9 +193,6 @@ import xarray as xr
 import pandas as pd
 import multiprocessing as mp
 
-import glaes as gl
-import geokit as gk
-from osgeo import gdal
 from scipy.sparse import csr_matrix, vstack
 
 from pypsa.geo import haversine
@@ -19,11 +200,15 @@ from vresutils import landuse as vlanduse
 from vresutils.array import spdiag
 
 import progressbar as pgb
-import logging
-logger = logging.getLogger(__name__)
 
 bounds = dx = dy = config = paths = gebco = clc = natura = None
 def init_globals(bounds_xXyY, n_dx, n_dy, n_config, n_paths):
+    # Late import so that the GDAL Context is only created in the new processes
+    global gl, gk, gdal
+    import glaes as gl
+    import geokit as gk
+    from osgeo import gdal as gdal
+
     # global in each process of the multiprocessing.Pool
     global bounds, dx, dy, config, paths, gebco, clc, natura
 
@@ -33,8 +218,9 @@ def init_globals(bounds_xXyY, n_dx, n_dy, n_config, n_paths):
     config = n_config
     paths = n_paths
 
-    gebco = gk.raster.loadRaster(paths["gebco"])
-    gebco.SetProjection(gk.srs.loadSRS(4326).ExportToWkt())
+    if "max_depth" in config:
+        gebco = gk.raster.loadRaster(paths["gebco"])
+        gebco.SetProjection(gk.srs.loadSRS(4326).ExportToWkt())
 
     clc = gk.raster.loadRaster(paths["corine"])
     clc.SetProjection(gk.srs.loadSRS(3035).ExportToWkt())
@@ -86,8 +272,12 @@ def calculate_potential(gid, save_map=None):
 
 
 if __name__ == '__main__':
+    if 'snakemake' not in globals():
+        from _helpers import mock_snakemake
+        snakemake = mock_snakemake('build_renewable_profiles', technology='solar')
+    configure_logging(snakemake)
+
     pgb.streams.wrap_stderr()
-    logging.basicConfig(level=snakemake.config['logging_level'])
 
     config = snakemake.config['renewable'][snakemake.wildcards.technology]
 
@@ -110,6 +300,11 @@ if __name__ == '__main__':
     # mp.set_start_method('spawn')
     with mp.Pool(initializer=init_globals, initargs=(bounds_xXyY, dx, dy, config, paths),
                  maxtasksperchild=20, processes=snakemake.config['atlite'].get('nprocesses', 2)) as pool:
+
+        # The GDAL library creates a GDAL context on module import, which may not be shared over multiple
+        # processes or the PROJ4 library has a hickup, so we import only after forking.
+        import geokit as gk
+
         regions = gk.vector.extractFeatures(paths["regions"], onlyAttr=True)
         buses = pd.Index(regions['name'], name="bus")
         widgets = [
@@ -124,7 +319,8 @@ if __name__ == '__main__':
 
     potentials = config['capacity_per_sqkm'] * vlanduse._cutout_cell_areas(cutout)
     potmatrix = matrix * spdiag(potentials.ravel())
-    potmatrix.data[potmatrix.data < 1.] = 0 # ignore weather cells where only less than 1 MW can be installed
+    if not config.get('keep_all_available_areas', False):
+        potmatrix.data[potmatrix.data < 1.] = 0 # ignore weather cells where only less than 1 MW can be installed
     potmatrix.eliminate_zeros()
 
     resource = config['resource']

@@ -1,3 +1,75 @@
+# SPDX-FileCopyrightText: : 2017-2020 The PyPSA-Eur Authors
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+"""
+Creates GIS shape files of the countries, exclusive economic zones and `NUTS3 <https://en.wikipedia.org/wiki/Nomenclature_of_Territorial_Units_for_Statistics>`_ areas.
+
+Relevant Settings
+-----------------
+
+.. code:: yaml
+
+    countries:
+
+.. seealso::
+    Documentation of the configuration file ``config.yaml`` at
+    :ref:`toplevel_cf`
+
+Inputs
+------
+
+- ``data/bundle/naturalearth/ne_10m_admin_0_countries.shp``: World country shapes
+
+    .. image:: ../img/countries.png
+        :scale: 33 %
+
+- ``data/bundle/eez/World_EEZ_v8_2014.shp``: World `exclusive economic zones <https://en.wikipedia.org/wiki/Exclusive_economic_zone>`_ (EEZ)
+
+    .. image:: ../img/eez.png
+        :scale: 33 %
+
+- ``data/bundle/NUTS_2013_60M_SH/data/NUTS_RG_60M_2013.shp``: Europe NUTS3 regions
+
+    .. image:: ../img/nuts3.png
+        :scale: 33 %
+
+- ``data/bundle/nama_10r_3popgdp.tsv.gz``: Average annual population by NUTS3 region (`eurostat <http://appsso.eurostat.ec.europa.eu/nui/show.do?dataset=nama_10r_3popgdp&lang=en>`_)
+- ``data/bundle/nama_10r_3gdp.tsv.gz``: Gross domestic product (GDP) by NUTS 3 regions (`eurostat <http://appsso.eurostat.ec.europa.eu/nui/show.do?dataset=nama_10r_3gdp&lang=en>`_)
+- ``data/bundle/ch_cantons.csv``: Mapping between Swiss Cantons and NUTS3 regions
+- ``data/bundle/je-e-21.03.02.xls``: Population and GDP data per Canton (`BFS - Swiss Federal Statistical Office <https://www.bfs.admin.ch/bfs/en/home/news/whats-new.assetdetail.7786557.html>`_ )
+
+Outputs
+-------
+
+- ``resources/country_shapes.geojson``: country shapes out of country selection
+
+    .. image:: ../img/country_shapes.png
+        :scale: 33 %
+
+- ``resources/offshore_shapes.geojson``: EEZ shapes out of country selection
+
+    .. image:: ../img/offshore_shapes.png
+        :scale: 33 %
+
+- ``resources/europe_shape.geojson``: Shape of Europe including countries and EEZ
+
+    .. image:: ../img/europe_shape.png
+        :scale: 33 %
+
+- ``resources/nuts3_shapes.geojson``: NUTS3 shapes out of country selection including population and GDP data.
+
+    .. image:: ../img/nuts3_shapes.png
+        :scale: 33 %
+
+Description
+-----------
+
+"""
+
+import logging
+from _helpers import configure_logging
+
 import os
 import numpy as np
 from operator import attrgetter
@@ -8,8 +80,10 @@ import pandas as pd
 import geopandas as gpd
 from shapely.geometry import MultiPolygon, Polygon
 from shapely.ops import cascaded_union
-
 import pycountry as pyc
+
+logger = logging.getLogger(__name__)
+
 
 def _get_country(target, **keys):
     assert len(keys) == 1
@@ -41,7 +115,7 @@ def countries():
     fieldnames = (df[x].where(lambda s: s!='-99') for x in ('ISO_A2', 'WB_A2', 'ADM0_A3'))
     df['name'] = reduce(lambda x,y: x.fillna(y), fieldnames, next(fieldnames)).str[0:2]
 
-    df = df.loc[df.name.isin(cntries) & (df['scalerank'] == 0)]
+    df = df.loc[df.name.isin(cntries) & ((df['scalerank'] == 0) | (df['scalerank'] == 5))]
     s = df.set_index('name')['geometry'].map(_simplify_polys)
     if 'RS' in cntries: s['RS'] = s['RS'].union(s.pop('KV'))
 
@@ -117,7 +191,7 @@ def nuts3(country_shapes):
     manual['geometry'] = manual['country'].map(country_shapes)
     manual = manual.dropna()
 
-    df = df.append(manual)
+    df = df.append(manual, sort=False)
 
     df.loc['ME000', 'pop'] = 650.
 
@@ -133,28 +207,10 @@ def save_to_geojson(df, fn):
     df.to_file(fn, driver='GeoJSON', schema=schema)
 
 if __name__ == "__main__":
-    # Detect running outside of snakemake and mock snakemake for testing
     if 'snakemake' not in globals():
-        from vresutils.snakemake import MockSnakemake, Dict
-        snakemake = MockSnakemake(
-            path='..',
-            wildcards={},
-            input=Dict(
-                naturalearth='data/bundle/naturalearth/ne_10m_admin_0_countries.shp',
-                eez='data/bundle/eez/World_EEZ_v8_2014.shp',
-                nuts3='data/bundle/NUTS_2013_60M_SH/data/NUTS_RG_60M_2013.shp',
-                nuts3pop='data/bundle/nama_10r_3popgdp.tsv.gz',
-                nuts3gdp='data/bundle/nama_10r_3gdp.tsv.gz',
-                ch_cantons='data/bundle/ch_cantons.csv',
-                ch_popgdp='data/bundle/je-e-21.03.02.xls'
-            ),
-            output=Dict(
-                country_shapes='resources/country_shapes.geojson',
-                offshore_shapes='resource/offshore_shapes.geojson',
-                europe_shape='resources/europe_shape.geojson',
-                nuts3_shapes='resources/nuts3_shapes.geojson'
-            )
-        )
+        from _helpers import mock_snakemake
+        snakemake = mock_snakemake('build_shapes')
+    configure_logging(snakemake)
 
     country_shapes = countries()
     save_to_geojson(country_shapes, snakemake.output.country_shapes)
